@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add an optional MLX backend for raw / L0 / L1, with direct next-token scoring, a comparison script, and GPU tests.
+
 ## 0.2.0 (2026-09-28)
 
 - **New, opt-in: L0 can read as many option rotations as the decision needs instead of K, with the

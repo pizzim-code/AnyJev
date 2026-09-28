@@ -1,0 +1,41 @@
+[
+  {
+    "command": [
+      ".venv/bin/ruff",
+      "check",
+      "anyjev",
+      "bench",
+      "demo",
+      "scripts",
+      "space",
+      "tests"
+    ],
+    "exit_code": 0,
+    "output": "All checks passed!\n",
+    "engine_model": null
+  },
+  {
+    "command": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short"
+    ],
+    "exit_code": 0,
+    "output": "........................................................................ [ 59%]\n..................................................                       [100%]\n122 passed in 6.26s\n",
+    "engine_model": "/Users/pete/AnyJev/.local/native-model-4b"
+  },
+  {
+    "command": [
+      ".venv/core/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short"
+    ],
+    "exit_code": 0,
+    "output": "...........................................................ssss......... [ 59%]\n...........s.................................sss..                       [100%]\n114 passed, 8 skipped in 2.77s\n",
+    "engine_model": null
+  }
+]

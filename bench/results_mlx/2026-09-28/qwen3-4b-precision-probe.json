@@ -1,0 +1,64 @@
+{
+  "purpose": "single-prompt precision diagnostic; direct forwards versus backend wrappers",
+  "source_result": "qwen3-4b-float16.json",
+  "prompt_index": 9,
+  "prompt": "<|im_start|>system\nYou are a decision function. You will be given a state and one question. Reply with the answer label only: no words, no punctuation, no explanation.<|im_end|>\n<|im_start|>user\nState:\nURGENT: production is down for all users.\n\nQuestion: Is this message a complaint?\nAnswer Yes or No.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+  "label_token_ids": [
+    9454,
+    2753
+  ],
+  "runs": [
+    {
+      "engine": "hf",
+      "dtype": "float16",
+      "direct": [
+        -2.3841855067985307e-07,
+        -16.78125
+      ],
+      "wrapper": [
+        -2.3841855067985307e-07,
+        -16.78125
+      ],
+      "wrapper_direct_max_diff": 0.0
+    },
+    {
+      "engine": "hf",
+      "dtype": "float32",
+      "direct": [
+        -2.3841855067985307e-07,
+        -16.73438262939453
+      ],
+      "wrapper": [
+        -2.3841855067985307e-07,
+        -16.73442840576172
+      ],
+      "wrapper_direct_max_diff": 4.57763671875e-05
+    },
+    {
+      "engine": "mlx",
+      "dtype": "float16",
+      "direct": [
+        0.0,
+        -16.5
+      ],
+      "wrapper": [
+        0.0,
+        -16.5
+      ],
+      "wrapper_direct_max_diff": 0.0
+    },
+    {
+      "engine": "mlx",
+      "dtype": "float32",
+      "direct": [
+        0.0,
+        -16.7591552734375
+      ],
+      "wrapper": [
+        0.0,
+        -16.7591552734375
+      ],
+      "wrapper_direct_max_diff": 0.0
+    }
+  ]
+}

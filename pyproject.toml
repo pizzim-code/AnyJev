@@ -31,6 +31,7 @@ dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]
 hf = ["torch>=2.3", "transformers>=4.53"]
+mlx = ["mlx-lm>=0.29.1"]
 bench = ["datasets>=2.20", "scikit-learn>=1.4"]
 dev = ["pytest>=8", "ruff"]
 
@@ -52,3 +53,4 @@ ignore = ["E731"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["engine: requires an optional inference engine and model weights"]

@@ -2,6 +2,9 @@
 
 | What | Where | License | Used for |
 |---|---|---|---|
+| SmolLM2-135M-Instruct | https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct | Apache-2.0 | Llama-architecture MLX parity check; no external dataset |
+| Qwen3-0.6B / Qwen3-4B | https://huggingface.co/Qwen/Qwen3-0.6B / https://huggingface.co/Qwen/Qwen3-4B | Apache-2.0 | Local MLX parity checks; no external dataset |
+| MLX / MLX LM | https://github.com/ml-explore/mlx / https://github.com/ml-explore/mlx-lm | MIT | Optional native Apple silicon backend, `anyjev[mlx]` |
 | 20 Newsgroups (SetFit mirror) | https://huggingface.co/datasets/SetFit/20_newsgroups | see dataset card | `newsgroups` task |
 | deepset/prompt-injections | https://huggingface.co/datasets/deepset/prompt-injections | Apache-2.0 | `injection` task |
 | MASSIVE intents (mteb mirror) | https://huggingface.co/datasets/mteb/amazon_massive_scenario | CC-BY-4.0 | `massive_route` task (18-way utterance routing) |

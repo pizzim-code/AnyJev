@@ -1,0 +1,7 @@
+{
+  "repository": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+  "license": "apache-2.0",
+  "model_type": "llama",
+  "model_path": "/Users/pete/.codex/worktrees/mlx-backend/AnyJev/.venv/models/smollm2-135m"
+}

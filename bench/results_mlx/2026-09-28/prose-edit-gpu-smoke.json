@@ -1,0 +1,30 @@
+[
+  {
+    "command": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_mlx.py",
+      "-m",
+      "engine"
+    ],
+    "engine_model": "/Users/pete/AnyJev/.local/native-model-4b",
+    "exit_code": 0,
+    "output": ".                                                                        [100%]\n1 passed, 10 deselected in 3.18s\n"
+  },
+  {
+    "command": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/test_mlx.py",
+      "-m",
+      "engine"
+    ],
+    "engine_model": "/Users/pete/.codex/worktrees/mlx-backend/AnyJev/.venv/models/smollm2-135m",
+    "exit_code": 0,
+    "output": ".                                                                        [100%]\n1 passed, 10 deselected in 1.82s\n"
+  }
+]

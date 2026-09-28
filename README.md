@@ -213,6 +213,8 @@ Dated plan and help-wanted files: [ROADMAP.md](https://github.com/nokia-applied-
 
 <sub>Also: at most 26 options in the letter readout (a span readout is on the roadmap, not in the code); coverage at 5% risk is a high-variance estimate at n = 300; the headline tables are Qwen models; every decision here is scored in isolation, not inside an agent loop.</sub>
 
+For native Apple silicon scoring at raw / L0 / L1, see the [MLX backend guide](docs/mlx.md).
+
 ## 🤝 Contributing and citation
 
 Backends and bench providers are one file each; several are **help wanted** ([ROADMAP.md](https://github.com/nokia-applied-research/AnyJev/blob/main/ROADMAP.md), [CONTRIBUTING.md](https://github.com/nokia-applied-research/AnyJev/blob/main/CONTRIBUTING.md)). Changes: [CHANGELOG.md](https://github.com/nokia-applied-research/AnyJev/blob/main/CHANGELOG.md). Credits: [CREDITS.md](https://github.com/nokia-applied-research/AnyJev/blob/main/CREDITS.md).
