@@ -1,0 +1,364 @@
+"""Run bounded GPU parity, call-independence, and memory checks on local weights.
+
+Handwritten inputs check engine agreement and output contracts, not task accuracy.
+Run engines in separate processes. Save partial evidence if a resource limit stops a run.
+"""
+
+import argparse
+import gc
+import hashlib
+import importlib.metadata
+import json
+import os
+import platform
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import psutil
+from mlx_parity import digest, fixtures
+
+from anyjev import Decider, Question
+
+CRITERIA = {
+    "max_logprob_diff": 0.1,
+    "max_probability_diff": 0.02,
+    "all_argmaxes_match": True,
+    "repeat_max_abs_diff": 1e-6,
+    "active_growth_bytes": 64 * 1024**2,
+    "rss_growth_bytes": 512 * 1024**2,
+    "rss_stop_bytes": 20 * 1024**3,
+    "active_stop_bytes": 18 * 1024**3,
+    "wall_stop_seconds": 6000,
+    "repeat_calls": 120,
+    "prompt_lengths": [1, 32, 128, 512, 1024],
+}
+STATES = [
+    "I paid yesterday but my account still says overdue.",
+    "Please cancel my subscription at the end of this month.",
+    "The invoice lists five seats. We only have three.",
+    "Can you explain the tax on this receipt?",
+    "The reset link expires before I can click it.",
+    "Uploads fail on Safari but work on Firefox.",
+    "Our database connection stopped working after the upgrade.",
+    "I can log in but the dashboard is blank.",
+    "Can we arrange a product demo on Tuesday?",
+    "Do you sell licenses to universities?",
+    "What discount applies to fifty annual licenses?",
+    "We are evaluating your service for next year.",
+    "Thank you for the explanation. That answers my question.",
+    "Just testing this message form.",
+    "I have no question at the moment.",
+    "The weather has been pleasant this week.",
+    "This is unacceptable. I have waited three weeks for an answer!",
+    "No rush. Please respond when you have a moment.",
+    "Production stopped ten minutes ago. Every customer is affected.",
+    "My issue is resolved, but I am unhappy about how long it took.",
+    "I cannot tell whether this is a billing problem or an app problem.",
+    "",
+    "  \n\t",
+    "Invoice #729: €49.00. Please explain the charge. 🙂",
+]
+
+
+def save(path, value):
+    tmp = Path(str(path) + ".tmp")
+    tmp.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
+    tmp.replace(path)
+
+
+def worker(args):
+    started = time.monotonic()
+    result = {"backend": args.worker, "status": "running", "memory": [], "decisions": []}
+    save(args.json, result)
+    if args.worker == "mlx":
+        import mlx.core as mx
+        from mlx.utils import tree_flatten
+
+        from anyjev.backends.mlx import MLXBackend
+
+        assert mx.metal.is_available()
+        mx.set_default_device(mx.gpu)
+        be = MLXBackend(args.model, dtype="float32")
+        result["device"] = str(mx.default_device())
+        result["dtypes"] = sorted({str(p.dtype) for _, p in tree_flatten(be.model.parameters())})
+        # Evaluate an explicit GPU operation before measuring model workloads.
+        probe = mx.add(mx.array([1.0]), mx.array([2.0]), stream=mx.gpu)
+        mx.eval(probe)
+        assert probe.item() == 3.0
+        result["allocator"] = "default cache limit, unmodified"
+        result["metal_device_info"] = mx.device_info()
+    else:
+        import torch
+
+        from anyjev.backends.hf import HFBackend
+
+        assert os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") == "0"
+        assert torch.backends.mps.is_available()
+        be = HFBackend(args.model, device="mps", dtype="float32", batch_size=1)
+        result["device"] = str(next(be.model.parameters()).device)
+        result["dtypes"] = sorted({str(p.dtype) for p in be.model.parameters()})
+        assert result["device"].startswith("mps")
+    result["versions"] = {
+        n: importlib.metadata.version(n) for n in ("mlx", "mlx-lm", "torch", "transformers", "numpy", "psutil")
+    }
+    result["fallback"] = os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK")
+
+    def memory(stage):
+        gc.collect()
+        sample = {
+            "stage": stage,
+            "elapsed_seconds": time.monotonic() - started,
+            "rss_bytes": psutil.Process().memory_info().rss,
+        }
+        if args.worker == "mlx":
+            mx.synchronize()
+            sample.update(
+                active_bytes=mx.get_active_memory(), cache_bytes=mx.get_cache_memory(), peak_bytes=mx.get_peak_memory()
+            )
+        result["memory"].append(sample)
+        save(args.json, result)
+        if sample["rss_bytes"] > CRITERIA["rss_stop_bytes"]:
+            raise RuntimeError("RSS ceiling reached; remaining coverage is incomplete")
+        if sample.get("active_bytes", 0) > CRITERIA["active_stop_bytes"]:
+            raise RuntimeError("active-memory ceiling reached; remaining coverage is incomplete")
+        return sample
+
+    try:
+        memory("loaded")
+        prompts = ["x" + " x" * (n - 1) for n in CRITERIA["prompt_lengths"]]
+        tokens = [be.tokenizer.encode(p, add_special_tokens=False) for p in prompts]
+        assert [len(t) for t in tokens] == CRITERIA["prompt_lengths"]
+        label_ids = [be.tokenizer.encode(s, add_special_tokens=False)[0] for s in ("A", "B", "C", "D")]
+        ids = [label_ids + [label_ids[1]] for _ in prompts]
+        result.update(prompts=prompts, prompt_token_ids=tokens, requested_ids=ids)
+        baseline = be.next_token_logprobs(prompts, ids)
+        assert all(np.isfinite(x).all() for x in baseline)
+        assert all(x[1] == x[-1] for x in baseline)
+        result["logprobs"] = [x.tolist() for x in baseline]
+        reverse = be.next_token_logprobs(prompts[::-1], [x[::-1] for x in ids[::-1]])
+        delta = max(float(np.max(np.abs(x - y[::-1]))) for x, y in zip(baseline, reverse[::-1]))
+        result["reordered_batch_delta"] = delta
+        result["reordered_batch_passed"] = delta <= CRITERIA["repeat_max_abs_diff"]
+        memory("lengths_and_reorder")
+        print(f"{args.worker}: lengths and reordered calls complete", flush=True)
+        if args.worker == "mlx":
+            # Warm every shape and batch pattern before comparing sustained memory.
+            patterns = [[0], [1, 2], [3], [4], [2, 0, 2], [4, 1]]
+            for pattern in patterns:
+                be.next_token_logprobs([prompts[i] for i in pattern], [ids[i] for i in pattern])
+            warm = memory("warmup_complete")
+            repeat = []
+            for call in range(CRITERIA["repeat_calls"]):
+                pattern = patterns[call % len(patterns)]
+                then = time.monotonic()
+                scored = be.next_token_logprobs([prompts[i] for i in pattern], [ids[i] for i in pattern])
+                delta = max(float(np.max(np.abs(x - baseline[i]))) for x, i in zip(scored, pattern))
+                repeat.append(
+                    {"call": call, "prompt_indices": pattern, "max_abs_diff": delta, "seconds": time.monotonic() - then}
+                )
+                if (call + 1) % 12 == 0:
+                    result["repeated_calls"] = repeat
+                    memory(f"repeat_{call + 1}")
+                    print(f"mlx: repeated calls {call + 1}/120", flush=True)
+            end = memory("repeat_complete")
+            measured = [m for m in result["memory"] if m["stage"].startswith("repeat_")]
+            result["stability"] = {
+                "repeat_max_abs_diff": max(x["max_abs_diff"] for x in repeat),
+                "active_growth_bytes": max(m["active_bytes"] for m in measured) - warm["active_bytes"],
+                "rss_growth_bytes": max(m["rss_bytes"] for m in measured) - warm["rss_bytes"],
+                "allocator": "default cache limit, unmodified",
+                "cache_before_clear_bytes": end["cache_bytes"],
+            }
+            mx.clear_cache()
+            memory("after_cache_clear")
+        result["decision_scoring_inputs"] = {}
+        original_score = be.next_token_logprobs
+
+        def record_score(prompts, ids):
+            for prompt, requested in zip(prompts, ids):
+                entry = {
+                    "prompt": prompt,
+                    "tokens": be.tokenizer.encode(prompt, add_special_tokens=False),
+                    "requested_ids": list(requested),
+                }
+                key = hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()
+                result["decision_scoring_inputs"][key] = entry
+            return original_score(prompts, ids)
+
+        be.next_token_logprobs = record_score
+        questions, calibration, labels, _ = fixtures()
+        questions.append(Question.choice(questions[0].text, list(reversed(questions[0].options))))
+        labels.append([3 - x for x in labels[0]])
+        result["questions"] = [q.__dict__ for q in questions]
+        result["calibration"] = {"states": calibration, "labels": labels}
+        result["states"] = STATES
+        for qi, (question, gold) in enumerate(zip(questions, labels)):
+            dec = Decider(be, shared_prefix=False, adaptive_shifts=False)
+            for level in ("raw", "L0", "L1"):
+                if level == "L1":
+                    dec.calibrate(question, calibration, gold)
+                outputs = dec.decide_batch(STATES, question, level=level, require=level)
+                for si, output in enumerate(outputs):
+                    assert output.level == level
+                    assert len(output.probs) == question.k
+                    assert np.isfinite(output.probs).all() and np.all(output.probs >= 0)
+                    assert np.isclose(output.probs.sum(), 1.0)
+                    result["decisions"].append(
+                        {
+                            "question_index": qi,
+                            "state_index": si,
+                            "level": level,
+                            "probs": output.probs.tolist(),
+                            "answer": output.to_dict()["answer"],
+                        }
+                    )
+                memory(f"question_{qi}_{level}")
+                print(f"{args.worker}: question {qi} {level} complete", flush=True)
+        result["status"] = "complete"
+    except Exception as error:
+        result["status"] = "error"
+        result["error"] = f"{type(error).__name__}: {error}"
+        raise
+    finally:
+        result["elapsed_seconds"] = time.monotonic() - started
+        save(args.json, result)
+
+
+def compare(hf, mlx):
+    if hf.get("status") != "complete" or mlx.get("status") != "complete":
+        return {"passed": False, "reason": "incomplete worker"}
+    same = all(
+        hf[k] == mlx[k]
+        for k in ("prompt_token_ids", "requested_ids", "states", "questions", "calibration", "decision_scoring_inputs")
+    )
+    log_diffs = [float(np.max(np.abs(np.array(a) - b))) for a, b in zip(hf["logprobs"], mlx["logprobs"])]
+    decision_checks = []
+    for a, b in zip(hf["decisions"], mlx["decisions"], strict=True):
+        assert all(a[k] == b[k] for k in ("question_index", "state_index", "level"))
+        decision_checks.append(
+            {
+                "question_index": a["question_index"],
+                "state_index": a["state_index"],
+                "level": a["level"],
+                "argmax_match": bool(np.argmax(a["probs"]) == np.argmax(b["probs"])),
+                "max_abs_probability_diff": float(np.max(np.abs(np.array(a["probs"]) - b["probs"]))),
+            }
+        )
+    stable = mlx["stability"]
+    checks = {
+        "identical_inputs": same,
+        "logprob_differences_by_length": log_diffs,
+        "decisions": decision_checks,
+        "scoring_argmax_match": all(np.argmax(a) == np.argmax(b) for a, b in zip(hf["logprobs"], mlx["logprobs"])),
+        "call_independence": hf["reordered_batch_passed"] and mlx["reordered_batch_passed"],
+        "stability_passed": all(
+            stable[k] <= CRITERIA[k] for k in ("repeat_max_abs_diff", "active_growth_bytes", "rss_growth_bytes")
+        ),
+    }
+    checks["passed"] = bool(
+        same
+        and checks["scoring_argmax_match"]
+        and checks["call_independence"]
+        and checks["stability_passed"]
+        and max(log_diffs) <= CRITERIA["max_logprob_diff"]
+        and all(
+            d["argmax_match"] and d["max_abs_probability_diff"] <= CRITERIA["max_probability_diff"]
+            for d in decision_checks
+        )
+    )
+    return checks
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--model", required=True)
+    ap.add_argument("--json", required=True)
+    ap.add_argument("--worker", choices=["hf", "mlx"])
+    args = ap.parse_args()
+    if args.worker:
+        worker(args)
+        return
+    started = time.monotonic()
+    root = Path(__file__).resolve().parents[1]
+    dest = Path(args.json).resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    model = Path(args.model).resolve()
+    report = {
+        "criteria": CRITERIA,
+        "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "purpose": "GPU agreement, valid decisions, call independence and bounded memory stability; not task accuracy",
+        "command": sys.argv,
+        "dtype": "float32",
+        "batch_size": 1,
+        "model_path": str(model),
+        "platform": platform.platform(),
+        "python": sys.version,
+        "chip": subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], text=True).strip(),
+        "git_base": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "source_sha256": {
+            str(p.relative_to(root)): digest(p)
+            for p in (
+                Path(__file__).resolve(),
+                root / "scripts/mlx_parity.py",
+                root / "anyjev/backends/mlx.py",
+                root / "anyjev/backends/hf.py",
+            )
+        },
+        "model_file_sha256": {
+            p.name: digest(p) for p in sorted(model.iterdir()) if p.suffix in (".json", ".safetensors")
+        },
+        "backends": {},
+    }
+    save(dest, report)
+    env = dict(os.environ, PYTORCH_ENABLE_MPS_FALLBACK="0", HF_HUB_OFFLINE="1", TOKENIZERS_PARALLELISM="false")
+    for engine in ("mlx", "hf"):
+        child = dest.with_name(dest.stem + f"-{engine}.json")
+        command = [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--model",
+            str(model),
+            "--json",
+            str(child),
+            "--worker",
+            engine,
+        ]
+        with subprocess.Popen(command, env=env, cwd=root) as process:
+            stop = None
+            while process.poll() is None:
+                if time.monotonic() - started > CRITERIA["wall_stop_seconds"]:
+                    stop = "wall-clock ceiling"
+                try:
+                    if psutil.Process(process.pid).memory_info().rss > CRITERIA["rss_stop_bytes"]:
+                        stop = "RSS ceiling"
+                except psutil.NoSuchProcess:
+                    pass
+                if stop:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    break
+                time.sleep(0.5)
+            payload = json.loads(child.read_text()) if child.exists() else {"status": "no_output"}
+            payload["exit_code"] = process.wait()
+            if stop:
+                payload.update(status="resource_stop", stop_reason=stop)
+            report["backends"][engine] = payload
+            save(dest, report)
+            if stop:
+                break
+    report["checks"] = compare(report["backends"].get("hf", {}), report["backends"].get("mlx", {}))
+    report["elapsed_seconds"] = time.monotonic() - started
+    save(dest, report)
+    print(json.dumps({k: v for k, v in report["checks"].items() if k != "decisions"}, indent=2))
+    if not report["checks"]["passed"]:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

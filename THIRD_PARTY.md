@@ -2,6 +2,7 @@
 
 | What | Where | License | Used for |
 |---|---|---|---|
+| psutil | https://github.com/giampaolo/psutil | BSD-3-Clause | Process memory measurements and stop limits in `scripts/mlx_extended_validation.py` |
 | SmolLM2-135M-Instruct | https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct | Apache-2.0 | Llama-architecture MLX parity check; no external dataset |
 | Qwen3-0.6B / Qwen3-4B | https://huggingface.co/Qwen/Qwen3-0.6B / https://huggingface.co/Qwen/Qwen3-4B | Apache-2.0 | Local MLX parity checks; no external dataset |
 | MLX / MLX LM | https://github.com/ml-explore/mlx / https://github.com/ml-explore/mlx-lm | MIT | Optional native Apple silicon backend, `anyjev[mlx]` |
